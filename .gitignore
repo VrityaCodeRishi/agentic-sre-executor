@@ -39,5 +39,8 @@ agent/venv/
 crash.log
 crash.*.log
 
+# --- Helm local state ---
+.helm/
+
 # --- Node (if introduced later) ---
 node_modules/
