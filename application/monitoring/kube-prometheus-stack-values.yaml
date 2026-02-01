@@ -1,0 +1,133 @@
+crds:
+  enabled: true
+
+defaultRules:
+  create: true
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: agentic-sre
+      group_by: ['alertname', 'namespace', 'pod', 'node']
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 2h
+      routes:
+        # Watchdog alert - send to null (ignore)
+        - match:
+            alertname: Watchdog
+          receiver: 'agentic-sre'
+
+        - match:
+            alertname: KubePodImagePullBackOff
+          receiver: agentic-sre
+        - match:
+            alertname: KubePodCrashLoopBackOff
+          receiver: agentic-sre
+        - match:
+            alertname: KubePodOOMKilled
+          receiver: agentic-sre
+        - match:
+            alertname: KubePodContainerCreatingStuck
+          receiver: agentic-sre
+        - match:
+            alertname: KubePodMemoryNearLimit
+          receiver: agentic-sre
+        - match:
+            alertname: KubeNodeUnschedulable
+          receiver: agentic-sre
+        - match:
+            alertname: KubeNodeNotReady
+          receiver: agentic-sre
+    receivers:
+    - name: 'null'
+    - name: agentic-sre
+      webhook_configs:
+      - url: http://agentic-sre-agent.agentic.svc.cluster.local:8080/alertmanager
+        send_resolved: false
+
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: admin
+  defaultDashboardsEnabled: true
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki.observability.svc.cluster.local:3100/
+      isDefault: false
+  ingress:
+    enabled: true
+    ingressClassName: gce
+    annotations:
+      kubernetes.io/ingress.class: "gce"
+    path: /
+    pathType: Prefix
+    hosts:
+      - ""
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    externalLabels:
+      cluster: gke
+    retention: 15d
+    retentionSize: ""
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 30Gi
+
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
+    ruleNamespaceSelector: {}
+
+prometheusOperator:
+  enabled: true
+  admissionWebhooks:
+    enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  hostNetwork: false
+
+kubelet:
+  enabled: true
+  serviceMonitor:
+    cAdvisor: true
+    probes: true
+    resource: true
+
+coreDns:
+  enabled: true
+
+kubeApiServer:
+  enabled: true
+
+kubeControllerManager:
+  enabled: true
+
+kubeScheduler:
+  enabled: true
+
+kubeProxy:
+  enabled: true
+
+

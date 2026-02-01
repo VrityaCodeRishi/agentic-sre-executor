@@ -1,0 +1,10 @@
+langgraph
+ipython
+fastapi
+uvicorn[standard]
+pydantic
+requests
+psycopg[binary]
+kubernetes
+pyyaml
+openai

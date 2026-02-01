@@ -1,0 +1,76 @@
+# Values for the `grafana/loki` Helm chart (single-binary mode).
+# Chart details: https://artifacthub.io/packages/helm/grafana/loki
+#
+# This is a pragmatic, small-ish setup for demos / non-prod clusters:
+# - single replica
+# - filesystem storage + PVC
+# - retention enabled
+
+deploymentMode: SingleBinary
+
+# Ensure *only* SingleBinary is active. The chart can otherwise keep non-zero defaults
+# for SimpleScalable targets, which triggers the validate.yaml error you saw.
+simpleScalable:
+  enabled: false
+  replicas: 0
+
+read:
+  replicas: 0
+
+write:
+  replicas: 0
+
+backend:
+  replicas: 0
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+
+  # Loki config knobs (these keys are mapped into loki.yaml by the chart)
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  storage:
+    type: filesystem
+
+  limits_config:
+    # Enables Grafana Explore "log volume" queries (not disk volume).
+    volume_enabled: true
+    # Keep labels/metadata flexible for Kubernetes log labels.
+    allow_structured_metadata: true
+    retention_period: 168h
+
+  compactor:
+    retention_enabled: true
+    # Required when retention is enabled (fixes: "compactor.delete-request-store should be configured when retention is enabled")
+    delete_request_store: filesystem
+    working_directory: /var/loki/compactor
+
+  # Ensure Loki has on-disk paths available when using filesystem storage.
+  storage_config:
+    filesystem:
+      directory: /var/loki/chunks
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 20Gi
+
+gateway:
+  enabled: false
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+
+

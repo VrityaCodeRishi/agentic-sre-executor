@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentic
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentic-sre-agent
+  namespace: agentic
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentic-sre-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "namespaces", "nodes", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch", "update"]
+
+  # Needed for draining nodes via eviction API.
+  - apiGroups: ["policy"]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentic-sre-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentic-sre-agent
+subjects:
+  - kind: ServiceAccount
+    name: agentic-sre-agent
+    namespace: agentic
+---
+# Allow the agent (running in namespace agentic) to delete pods in the demo namespace
+# for the ImagePullBackOff "verify_retry" action.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentic-sre-agent-demo
+  namespace: demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["events", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentic-sre-agent-demo
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentic-sre-agent-demo
+subjects:
+  - kind: ServiceAccount
+    name: agentic-sre-agent
+    namespace: agentic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentic-sre-agent
+  namespace: agentic
+spec:
+  selector:
+    app: agentic-sre-agent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentic-sre-agent
+  namespace: agentic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentic-sre-agent
+  template:
+    metadata:
+      labels:
+        app: agentic-sre-agent
+    spec:
+      serviceAccountName: agentic-sre-agent
+      containers:
+        - name: agent
+          image: us-central1-docker.pkg.dev/buoyant-episode-386713/sre-agent/sre-agent:v0.1.2
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://sre_agent:sre_agent_password@postgres.agentic.svc.cluster.local:5432/sre_incidents"
+            - name: AGENT_MODE
+              value: "auto"
+            - name: CLUSTER_NAME
+              value: "gke"
+            - name: OPENAI_MODEL
+              value: "gpt-5.2"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-key
+                  key: api-key
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5

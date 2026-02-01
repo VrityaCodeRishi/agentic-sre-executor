@@ -1,0 +1,107 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mvp-runbook-alerts
+  namespace: observability
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: mvp.runbooks
+      rules:
+        - alert: KubePodImagePullBackOff
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{reason="ImagePullBackOff",namespace="demo"} == 1
+            )
+          for: 30s
+          labels:
+            severity: warning
+            runbook_id: RB_IMAGEPULL
+          annotations:
+            summary: "ImagePullBackOff: {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+            description: "Pod container is in ImagePullBackOff for >5m."
+
+        - alert: KubePodOOMKilled
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_last_terminated_reason{reason="OOMKilled",namespace="demo"} == 1
+            )
+          for: 30s
+          labels:
+            severity: warning
+            runbook_id: RB_OOM
+          annotations:
+            summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+            description: "Pod container was last terminated due to OOMKilled."
+
+        - alert: KubePodMemoryNearLimit
+          expr: |
+            max by (namespace, pod, container) (
+              (
+                container_memory_working_set_bytes{namespace="demo",container!="",image!=""}
+                /
+                on (namespace, pod) group_left
+                kube_pod_container_resource_limits{namespace="demo",resource="memory"}
+              ) > 0.9
+            )
+          for: 2m
+          labels:
+            severity: warning
+            runbook_id: RB_OOM
+          annotations:
+            summary: "Memory near limit (>90%): {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+            description: "Container memory working set is above 90% of the configured memory limit for >2m."
+
+        - alert: KubePodContainerCreatingStuck
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{reason="ContainerCreating",namespace="demo"} == 1
+            )
+          for: 2m
+          labels:
+            severity: warning
+            runbook_id: RB_CONTAINERCREATING
+          annotations:
+            summary: "ContainerCreating stuck: {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+            description: "Pod container has been in ContainerCreating for >5m. Agent will inspect events and remediate if possible."
+
+        - alert: KubePodCrashLoopBackOff
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",namespace="demo"} == 1
+            )
+          for: 2m
+          labels:
+            severity: warning
+            runbook_id: RB_CRASHLOOP
+          annotations:
+            summary: "CrashLoopBackOff: {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+            description: "Pod container is in CrashLoopBackOff. Agent will check for ImagePullBackOff first, then OOM, then suggest further actions."
+
+        - alert: KubeNodeUnschedulable
+          expr: |
+            max by (node) (
+              kube_node_spec_unschedulable == 1
+            )
+          for: 1m
+          labels:
+            severity: warning
+            runbook_id: RB_NODE_UNSCHEDULABLE
+          annotations:
+            summary: "Node unschedulable (cordoned): {{ $labels.node }}"
+            description: "Node is marked unschedulable. Agent will uncordon only if node is Ready and has no unhealthy conditions."
+
+        - alert: KubeNodeNotReady
+          expr: |
+            max by (node)(kube_node_status_condition{condition="Ready", status="true"} == 0)
+          for: 2m
+          labels:
+            severity: critical
+            runbook_id: RB_NODE_NOTREADY
+          annotations:
+            summary: "Node NotReady: {{ $labels.node }}"
+            description: "Node is NotReady for >5m. Agent will cordon+drain, then attempt reboot via debug pod."
+
+
+

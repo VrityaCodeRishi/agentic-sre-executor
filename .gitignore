@@ -1,0 +1,43 @@
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+agent/venv/
+
+# Logs / local runtime files
+*.log
+*.pid
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# --- Node (if introduced later) ---
+node_modules/

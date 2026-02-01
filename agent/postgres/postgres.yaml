@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-auth
+  namespace: agentic
+type: Opaque
+stringData:
+  POSTGRES_USER: sre_agent
+  POSTGRES_PASSWORD: sre_agent_password
+  POSTGRES_DB: sre_incidents
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: agentic
+data:
+  001-schema.sql: |
+    -- Enable pgvector extension for semantic similarity search
+    create extension if not exists vector;
+
+    create table if not exists incidents (
+      id bigserial primary key,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+
+      fingerprint text not null unique,
+      alertname text,
+      namespace text,
+      pod text,
+      severity text,
+
+      runbook_id text,
+      status text not null default 'open', -- open|resolved|suppressed
+      agent_mode text not null default 'recommend',
+
+      summary text,
+      -- Vector embedding for semantic similarity search (1536 dimensions for OpenAI text-embedding-3-small)
+      summary_embedding vector(1536)
+    );
+
+    create table if not exists incident_events (
+      id bigserial primary key,
+      incident_id bigint not null references incidents(id) on delete cascade,
+      ts timestamptz not null default now(),
+      event_type text not null,
+      payload jsonb not null
+    );
+
+    create index if not exists incident_events_incident_id_ts_idx
+      on incident_events (incident_id, ts desc);
+
+    -- Vector similarity index for semantic search (IVFFlat for fast approximate search)
+    -- Note: IVFFlat requires data to exist. Index creation is deferred until first data insertion.
+    -- The agent will create this index when needed via migration or on first incident with embedding.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agentic
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  selector:
+    app.kubernetes.io/name: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: agentic
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      terminationGracePeriodSeconds: 30
+      # NOTE: Postgres runs /docker-entrypoint-initdb.d scripts only on FIRST init of an empty data dir.
+      containers:
+        - name: postgres
+          # Use pgvector/pgvector image which includes postgres + pgvector extension
+          image: pgvector/pgvector:pg16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-auth
+          env:
+            # Ensure data goes into the mounted PVC directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-lc", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1 -p 5432"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-lc", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1 -p 5432"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

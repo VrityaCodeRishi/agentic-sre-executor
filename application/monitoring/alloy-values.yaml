@@ -1,0 +1,124 @@
+crds:
+  create: true
+
+controller:
+  type: daemonset
+  tolerations:
+    - operator: Exists
+  volumes:
+    extra:
+      - name: runlogjournal
+        hostPath:
+          path: /run/log/journal
+          type: DirectoryOrCreate
+      - name: machineid
+        hostPath:
+          path: /etc/machine-id
+          type: File
+
+alloy:
+  enableReporting: false
+  mounts:
+    varlog: true
+    dockercontainers: false
+    extra:
+      - name: runlogjournal
+        mountPath: /run/log/journal
+        readOnly: true
+      - name: machineid
+        mountPath: /etc/machine-id
+        readOnly: true
+
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+
+  configMap:
+    create: true
+    content: |
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // Push logs to Loki (in the same cluster/namespace).
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.observability.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Promote a *small, safe* subset of pod labels into Loki labels.
+      // Avoid importing all pod labels as Loki labels (can cause high-cardinality + ingestion limits).
+      discovery.relabel "pods_labeled" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Standard identity labels
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+
+        // Common app labels (keep only these)
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+          regex         = "(.+)"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+          regex         = "(.+)"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_instance"]
+          target_label  = "app_instance"
+          regex         = "(.+)"
+        }
+        rule {
+          action        = "replace"
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component"]
+          target_label  = "app_component"
+          regex         = "(.+)"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods_labeled.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.source.journal "journald_var" {
+        path       = "/var/log/journal"
+        forward_to = [loki.write.default.receiver]
+        labels     = { job = "node-journald" }
+      }
+
+      loki.source.journal "journald_run" {
+        path       = "/run/log/journal"
+        forward_to = [loki.write.default.receiver]
+        labels     = { job = "node-journald" }
+      }
