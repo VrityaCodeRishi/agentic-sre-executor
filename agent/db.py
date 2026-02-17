@@ -129,6 +129,85 @@ def get_latest_event_by_type(*, incident_id: int, event_type: str) -> Optional[D
         return cur.fetchone()
 
 
+def get_similar_past_incidents(
+    *,
+    current_incident_id: int,
+    alertname: Optional[str],
+    namespace: Optional[str],
+    pod: Optional[str],
+    node: Optional[str],
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Return all past incidents similar to the current one, across all time.
+
+    Similarity is defined as matching any of:
+      - same alertname
+      - same namespace + pod
+      - same node (when node is non-empty)
+
+    Only incidents that have a 'final' event (i.e. the agent completed a run)
+    are included. The action outcome is extracted from that event's JSONB payload.
+    Full history is returned (no time window) so the analysis LLM can detect
+    long-running repeat patterns.
+    """
+    filters = []
+    params: List[Any] = [current_incident_id]
+
+    if alertname:
+        filters.append("i.alertname = %s")
+        params.append(alertname)
+    if namespace and pod:
+        filters.append("(i.namespace = %s AND i.pod = %s)")
+        params.extend([namespace, pod])
+    if node:
+        filters.append(
+            "EXISTS ("
+            "  SELECT 1 FROM incident_events we"
+            "  WHERE we.incident_id = i.id AND we.event_type = 'webhook_received'"
+            "  AND we.payload->'labels'->>'node' = %s"
+            ")"
+        )
+        params.append(node)
+
+    if not filters:
+        return []
+
+    where_clause = " OR ".join(filters)
+
+    sql = f"""
+        SELECT
+            i.id,
+            i.alertname,
+            i.namespace,
+            i.pod,
+            i.runbook_id,
+            i.severity,
+            to_char(i.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+            to_char(i.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
+            fe.payload->'state'->>'action_taken'      AS action_taken,
+            fe.payload->'state'->>'action_recommended' AS action_recommended,
+            fe.payload->'state'->>'action_error'       AS action_error,
+            fe.payload->>'runbook_id'                  AS final_runbook_id
+        FROM incidents i
+        JOIN LATERAL (
+            SELECT payload
+            FROM incident_events
+            WHERE incident_id = i.id AND event_type = 'final'
+            ORDER BY ts DESC
+            LIMIT 1
+        ) fe ON true
+        WHERE i.id != %s
+          AND ({where_clause})
+        ORDER BY i.updated_at DESC
+        LIMIT {int(limit)}
+    """
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return list(cur.fetchall() or [])
+
+
 def advisory_lock_key(s: str) -> int:
     h = hashlib.sha256(s.encode("utf-8")).digest()
     key_u64 = int.from_bytes(h[:8], "big", signed=False)

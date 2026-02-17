@@ -213,13 +213,32 @@ def generate_incident_analysis(
     alert_labels: Dict[str, Any],
     alert_annotations: Dict[str, Any],
     final_state: Dict[str, Any],
+    past_incidents: Optional[list] = None,
     model: Optional[str] = None,
 ) -> str:
     """
     Generate a human-readable incident analysis for UI display.
     Returns markdown text (no tool-calls).
+
+    When past_incidents is provided, the analysis includes a history-aware
+    section that flags repeat patterns and gives the SRE team better
+    long-term remediation recommendations.
     """
     model = model or os.getenv("OPENAI_MODEL", "gpt-5.2")
+
+    has_history = bool(past_incidents)
+
+    history_instruction = (
+        "## Historical pattern & SRE recommendation\n"
+        "  - Based on past_incidents, identify if this is a repeat occurrence.\n"
+        "  - If the same action was taken before and the alert recurred, flag it as a short-term fix.\n"
+        "  - Recommend a more permanent resolution for the SRE team (e.g. root cause investigation, "
+        "resource right-sizing, image pipeline fix, node replacement).\n"
+        "  - If no past incidents exist, state 'No prior history found for this resource/alert.'\n"
+    ) if has_history else (
+        "## Historical pattern & SRE recommendation\n"
+        "  - No past incident history was available for this alert.\n"
+    )
 
     system = (
         "You are an SRE incident analyst.\n"
@@ -231,16 +250,19 @@ def generate_incident_analysis(
         "## Root cause hypothesis\n"
         "## Action taken / recommended\n"
         "## Why that action\n"
+        + history_instruction +
         "## Follow-ups\n"
     )
 
-    user = {
+    user: Dict[str, Any] = {
         "cluster": cluster,
         "runbook_id": runbook_id,
         "alert_labels": alert_labels,
         "alert_annotations": alert_annotations,
         "agent_state": final_state,
     }
+    if has_history:
+        user["past_incidents"] = past_incidents
 
     client = _openai_client()
     resp = client.chat.completions.create(
